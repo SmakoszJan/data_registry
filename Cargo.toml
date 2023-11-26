@@ -1,6 +1,6 @@
 [package]
 name = "data_registry"
-descriprion = "An unordered data structure with immediate insertion, removal and access."
+description = "An unordered data structure with immediate insertion, removal and access."
 version = "1.0.0"
 edition = "2021"
 license = "MIT"

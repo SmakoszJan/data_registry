@@ -1,7 +1,7 @@
 [package]
 name = "data_registry"
 description = "An unordered data structure with immediate insertion, removal and access."
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 license = "MIT"
 repository = "https://www.github.com/DragonGamesStudios/data_registry"

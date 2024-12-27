@@ -45,7 +45,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //!
 //! ```
 //! let mut r = Registry::new();
-//! 
+//!
 //! let index = r.insert(3);
 //! let three = r.remove(index);
 //! ```
@@ -56,7 +56,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //! let mut r = Registry::new();
 //! let i1 = r.insert(1);
 //! let i2 = r.insert(4);
-//! 
+//!
 //! let one = r[i1];
 //! r[i2] = r[i2] + 5;
 //! ```
@@ -66,14 +66,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #![no_std]
 
 use core::{
-    fmt::{Debug, self}, slice,
+    fmt::{self, Debug},
+    iter::Enumerate,
+    marker::PhantomData,
     ops::{Index, IndexMut},
-    iter::Enumerate
+    slice,
 };
 
 extern crate alloc;
 
 use alloc::vec::{self, Vec};
+use serde::{
+    de::{MapAccess, Visitor},
+    ser::SerializeMap,
+    Deserialize, Serialize,
+};
 
 /// An unordered, growable map type with heap-allocated contents, written as
 /// `Registry<T>`.
@@ -132,17 +139,17 @@ use alloc::vec::{self, Vec};
 /// Because of the way the `Registry` is implemented, most guarantees granted
 /// by a Rust `Vec` are also granted by the `Registry`. There are, however, some
 /// exceptions.
-/// 
+///
 /// Most importantly, element removal might cause reallocation. Thus, the size of
 /// allocated space is only guaranteed to be less or equal to the size allocated
 /// by a vector, given the same insertions and removals.
-/// 
+///
 /// Apart from that, `Registry` does not guarantee either continuity or order of
 /// inserted data.
 #[derive(Clone, Default)]
 pub struct Registry<T> {
     data: Vec<Option<T>>,
-    indices: Vec<usize>
+    indices: Vec<usize>,
 }
 
 impl<T> Registry<T> {
@@ -161,7 +168,7 @@ impl<T> Registry<T> {
     pub const fn new() -> Self {
         Self {
             data: Vec::new(),
-            indices: Vec::new()
+            indices: Vec::new(),
         }
     }
 
@@ -215,7 +222,7 @@ impl<T> Registry<T> {
     /// let registry_units = Registry::<()>::with_capacity(10);
     /// assert_eq!(registry_units.capacity(), usize::MAX);
     /// ```
-    /// 
+    ///
     /// Note, that registries constructed this way will still reallocate on removal,
     /// even if no reallocation would be necessary on insertion.
     #[inline]
@@ -223,7 +230,7 @@ impl<T> Registry<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
-            indices: Vec::new()
+            indices: Vec::new(),
         }
     }
 
@@ -238,6 +245,7 @@ impl<T> Registry<T> {
     /// assert!(reg.capacity() >= 10);
     /// ```
     #[inline]
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.data.capacity()
     }
@@ -245,6 +253,7 @@ impl<T> Registry<T> {
     /// Inserts an element into the registry and returns its unique index.
     /// As long, as the element is not removed, the index is guaranteeed
     /// to point at the element. Might cause reallocation.
+    #[must_use]
     pub fn insert(&mut self, item: T) -> usize {
         if let Some(index) = self.indices.pop() {
             self.data[index] = Some(item);
@@ -267,12 +276,12 @@ impl<T> Registry<T> {
     }
 
     /// Retains only the elements specified by the predicate.
-    /// 
+    ///
     /// In other words, remove all elements `e`, for which `f(&e)`
     /// returns `false`.
     pub fn retain<F: FnMut(&T) -> bool>(&mut self, mut f: F) {
         for (i, v) in self.data.iter_mut().enumerate() {
-            if !v.as_ref().map(|x| f(x)).unwrap_or(false) {
+            if !v.as_ref().map(&mut f).unwrap_or(false) {
                 *v = None;
                 self.indices.push(i);
             }
@@ -281,7 +290,7 @@ impl<T> Registry<T> {
 
     /// Retains only the elements specified by the predicate,
     /// passing a mutable reference to it.
-    /// 
+    ///
     /// In other words, remove all elements `e`, for which `f(&mut e)`
     /// returns `false`.
     pub fn retain_mut<F: FnMut(&T) -> bool>(&mut self, mut f: F) {
@@ -300,37 +309,43 @@ impl<T> Registry<T> {
     }
 
     /// Returns the count of contained elemetns.
-    pub fn count(&self) -> usize {
+    #[must_use]
+    pub fn len(&self) -> usize {
         self.data.len() - self.indices.len()
     }
 
     /// Returns `true`, if count is 0.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.count() == 0
+        self.len() == 0
     }
 
     /// Returns a reference to the element at `index`, if such exists.
+    #[must_use]
     pub fn get(&self, index: usize) -> Option<&T> {
-        self.data.get(index).map(Option::as_ref).flatten()
+        self.data.get(index).and_then(Option::as_ref)
     }
 
     /// Returns a mutable reference to the element at `index`, if such exists.
+    #[must_use]
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        self.data.get_mut(index).map(Option::as_mut).flatten()
+        self.data.get_mut(index).and_then(Option::as_mut)
     }
 
     /// Swaps two elements in the registry.
-    /// 
+    ///
     /// # Panics
     /// If indices `a` or `b` are not present in the registry.
     pub fn swap(&mut self, a: usize, b: usize) {
-        let x_a = self.data
+        let x_a = self
+            .data
             .get_mut(a)
             .expect("index a is not in the registry")
             .take()
             .expect("index a is not in the registry");
 
-        let x_b = self.data
+        let x_b = self
+            .data
             .get_mut(b)
             .expect("index b is not in the registry")
             .take()
@@ -340,54 +355,74 @@ impl<T> Registry<T> {
         self.data[b] = Some(x_a);
     }
 
-
     /// Returns `true` if the registry contains an element with the given value.
+    #[must_use]
     pub fn contains_value(&self, x: &T) -> bool
-    where T: PartialEq {
-        self.data.iter().find(|opt| opt.as_ref().is_some_and(|v| *v == *x)).is_some()
+    where
+        T: PartialEq,
+    {
+        self.data
+            .iter()
+            .any(|opt| opt.as_ref().is_some_and(|v| *v == *x))
     }
 
     /// Returns `true` if the registry contains the given index.
+    #[must_use]
     pub fn contains_index(&self, index: usize) -> bool {
-        index < self.data.len() && self.data[index].is_some()
+        self.data.get(index).is_some()
     }
 
     /// Creates an iterator over references to the registry's elements.
-    /// Of type (usize, &T).
-    pub fn iter<'a>(&'a self) -> Iter<'a, T> {
+    /// Of type `(usize, &T)`.
+    #[must_use]
+    pub fn iter(&self) -> Iter<'_, T> {
         self.into_iter()
     }
 
     /// Creates an iterator over mutable references to the registry's elements.
-    /// Of type (usize, &mut T).
-    pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, T> {
+    /// Of type `(usize, &mut T)`.
+    #[must_use]
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
         self.into_iter()
     }
 
     /// Creates an iterator over the registry's values.
-    /// Of type (usize, &T).
+    /// Of type `T`.
+    #[must_use]
     pub fn into_values(self) -> IntoValues<T> {
         IntoValues {
             data_iter: self.data.into_iter(),
-            free_indices: self.indices.len()
+            free_indices: self.indices.len(),
         }
     }
 
     /// Creates an iterator over references to the registry's values.
-    /// Of type (usize, &T).
-    pub fn values<'a>(&'a self) -> Values<'a, T> {
+    /// Of type `T`.
+    #[must_use]
+    pub fn values(&self) -> Values<'_, T> {
         Values {
             data_iter: self.data.iter(),
-            free_indices: self.indices.len()
+            free_indices: self.indices.len(),
         }
     }
 
     /// Creates an iterator over mutable references to the registry's values.
-    /// Of type (usize, &mut T).
-    pub fn values_mut<'a>(&'a mut self) -> ValuesMut<'a, T> {
+    /// Of type `&mut T`.
+    #[must_use]
+    pub fn values_mut(&mut self) -> ValuesMut<'_, T> {
         ValuesMut {
             data_iter: self.data.iter_mut(),
-            free_indices: self.indices.len()
+            free_indices: self.indices.len(),
+        }
+    }
+
+    /// Creates an iterator over keys in the registry.
+    /// Of type `usize`.
+    #[must_use]
+    pub fn keys(&self) -> Keys<'_, T> {
+        Keys {
+            data_iter: self.data.iter().enumerate(),
+            free_indices: self.indices.len(),
         }
     }
 }
@@ -405,7 +440,7 @@ impl<T, const N: usize> From<[T; N]> for Registry<T> {
     fn from(value: [T; N]) -> Self {
         Self {
             data: value.into_iter().map(Some).collect(),
-            indices: Vec::new()
+            indices: Vec::new(),
         }
     }
 }
@@ -414,14 +449,14 @@ impl<T> FromIterator<T> for Registry<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         Self {
             data: iter.into_iter().map(Some).collect(),
-            indices: Vec::new()
+            indices: Vec::new(),
         }
     }
 }
 
 impl<T> Index<usize> for Registry<T> {
     type Output = T;
-    
+
     fn index(&self, index: usize) -> &Self::Output {
         self.get(index).expect("no entry found for index")
     }
@@ -440,7 +475,7 @@ impl<'a, T> IntoIterator for &'a Registry<T> {
     fn into_iter(self) -> Self::IntoIter {
         Self::IntoIter {
             data_iter: self.data.iter().enumerate(),
-            free_indices: self.indices.len()
+            free_indices: self.indices.len(),
         }
     }
 }
@@ -452,7 +487,7 @@ impl<'a, T> IntoIterator for &'a mut Registry<T> {
     fn into_iter(self) -> Self::IntoIter {
         Self::IntoIter {
             data_iter: self.data.iter_mut().enumerate(),
-            free_indices: self.indices.len()
+            free_indices: self.indices.len(),
         }
     }
 }
@@ -464,8 +499,66 @@ impl<T> IntoIterator for Registry<T> {
     fn into_iter(self) -> Self::IntoIter {
         Self::IntoIter {
             data_iter: self.data.into_iter().enumerate(),
-            free_indices: self.indices.len()
+            free_indices: self.indices.len(),
         }
+    }
+}
+
+impl<T: Serialize> Serialize for Registry<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.len()))?;
+
+        for (i, v) in self {
+            map.serialize_entry(&i, v)?;
+        }
+
+        map.end()
+    }
+}
+
+struct RegistryVisitor<T>(PhantomData<T>);
+
+impl<T> Default for RegistryVisitor<T> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Visitor<'de> for RegistryVisitor<T> {
+    type Value = Registry<T>;
+
+    fn expecting(&self, formatter: &mut alloc::fmt::Formatter) -> alloc::fmt::Result {
+        formatter.write_str("a uint-indexed map")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut reg = Registry::with_capacity(map.size_hint().unwrap_or(0));
+
+        while let Some((i, entry)) = map.next_entry()? {
+            for j in reg.data.len()..i {
+                reg.data.push(None);
+                reg.indices.push(j);
+            }
+
+            reg.data.push(Some(entry));
+        }
+
+        Ok(reg)
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Registry<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(RegistryVisitor::default())
     }
 }
 
@@ -499,8 +592,9 @@ impl<T> Iterator for IntoIter<T> {
     }
 
     fn count(self) -> usize
-        where
-            Self: Sized, {
+    where
+        Self: Sized,
+    {
         self.len()
     }
 }
@@ -552,8 +646,9 @@ impl<'a, T> Iterator for Iter<'a, T> {
     }
 
     fn count(self) -> usize
-        where
-            Self: Sized, {
+    where
+        Self: Sized,
+    {
         self.len()
     }
 }
@@ -605,8 +700,9 @@ impl<'a, T> Iterator for IterMut<'a, T> {
     }
 
     fn count(self) -> usize
-        where
-            Self: Sized, {
+    where
+        Self: Sized,
+    {
         self.len()
     }
 }
@@ -658,8 +754,9 @@ impl<T> Iterator for IntoValues<T> {
     }
 
     fn count(self) -> usize
-        where
-            Self: Sized, {
+    where
+        Self: Sized,
+    {
         self.len()
     }
 }
@@ -711,8 +808,9 @@ impl<'a, T> Iterator for Values<'a, T> {
     }
 
     fn count(self) -> usize
-        where
-            Self: Sized, {
+    where
+        Self: Sized,
+    {
         self.len()
     }
 }
@@ -764,8 +862,9 @@ impl<'a, T> Iterator for ValuesMut<'a, T> {
     }
 
     fn count(self) -> usize
-        where
-            Self: Sized, {
+    where
+        Self: Sized,
+    {
         self.len()
     }
 }
@@ -781,6 +880,60 @@ impl<'a, T> DoubleEndedIterator for ValuesMut<'a, T> {
         loop {
             if let Some(item) = self.data_iter.next_back()? {
                 return Some(item);
+            }
+
+            // It was a None value.
+            self.free_indices -= 1;
+        }
+    }
+}
+
+/// An iterator over the keys of `Registry<T>`.
+/// Item type is `usize`.
+#[derive(Debug)]
+pub struct Keys<'a, T> {
+    data_iter: Enumerate<slice::Iter<'a, Option<T>>>,
+    /// Remaining free indices.
+    free_indices: usize,
+}
+
+impl<'a, T> Iterator for Keys<'a, T> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let (i, Some(_)) = self.data_iter.next()? {
+                return Some(i);
+            }
+
+            // It was a None value.
+            self.free_indices -= 1;
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len(), Some(self.len()))
+    }
+
+    fn count(self) -> usize
+    where
+        Self: Sized,
+    {
+        self.len()
+    }
+}
+
+impl<'a, T> ExactSizeIterator for Keys<'a, T> {
+    fn len(&self) -> usize {
+        self.data_iter.len() - self.free_indices
+    }
+}
+
+impl<'a, T> DoubleEndedIterator for Keys<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        loop {
+            if let (i, Some(_)) = self.data_iter.next_back()? {
+                return Some(i);
             }
 
             // It was a None value.

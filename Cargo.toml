@@ -1,11 +1,14 @@
 [package]
 name = "data_registry"
 description = "An unordered data structure with immediate insertion, removal and access."
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
 license = "MIT"
 repository = "https://www.github.com/DragonGamesStudios/data_registry"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
+serde = { version = "1.0.216", optional = true, default-features = false, features = ["alloc"] }
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]

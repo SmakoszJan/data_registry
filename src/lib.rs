@@ -146,10 +146,19 @@ use serde::{
 ///
 /// Apart from that, `Registry` does not guarantee either continuity or order of
 /// inserted data.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Registry<T> {
     data: Vec<Option<T>>,
     indices: Vec<usize>,
+}
+
+impl<T> Default for Registry<T> {
+    fn default() -> Self {
+        Self {
+            data: Vec::new(),
+            indices: Vec::new(),
+        }
+    }
 }
 
 impl<T> Registry<T> {

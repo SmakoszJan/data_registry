@@ -4,7 +4,7 @@ description = "An unordered data structure with immediate insertion, removal and
 version = "2.0.1"
 edition = "2021"
 license = "MIT"
-repository = "https://www.github.com/DragonGamesStudios/data_registry"
+repository = "https://github.com/DragonGamesStudios/data_registry"
 
 [dependencies]
 serde = { version = "1.0.216", optional = true, default-features = false, features = ["alloc"] }
